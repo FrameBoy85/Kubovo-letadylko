@@ -10,6 +10,7 @@
 <meta name="theme-color" content="#1d2533">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <script src="nastaveni-tabulky.js"></script>
 <style>
   body { margin: 0; background: #1d2533; font-family: system-ui, sans-serif; color: #fff;
@@ -37,18 +38,18 @@
 
   /* ===== DOTYKOVÝ REŽIM: ovládání vedle hry, aby nezakrývalo obraz ===== */
   html.dotyk { position: fixed; inset: 0; overflow: hidden; overscroll-behavior: none; }
-  body.dotyk { position: fixed; inset: 0; margin: 0; width: var(--sirka, 100vw); height: var(--vyska, 100vh); overflow: hidden; overscroll-behavior: none; touch-action: none;
+  body.dotyk { position: fixed; inset: 0; margin: 0; overflow: hidden; overscroll-behavior: none; touch-action: none;
                -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   body.dotyk h1, body.dotyk .help { display: none; }
-  body.dotyk #obal { height: 100%; gap: 10px; box-sizing: border-box;
-                    padding: 0 calc(8px + var(--okrajP, 0px)) 0 calc(8px + var(--okrajL, 0px)); }
-  body { --okrajL: env(safe-area-inset-left, 0px); --okrajP: env(safe-area-inset-right, 0px); }
-  body.dotyk canvas { touch-action: none; flex: 0 1 auto; max-width: none;
-                      width: min(calc(var(--sirka, 100vw) - 2 * var(--panel) - 36px - var(--okrajL, 0px) - var(--okrajP, 0px)), calc((var(--vyska, 100vh) - 12px) * 16 / 9));
+  /* hra vyplní přesně viditelnou plochu (velikosti dopočítá skript podle skutečné obrazovky) */
+  body.dotyk #obal { position: fixed; inset: 0; width: auto; gap: 10px; box-sizing: border-box;
+                     padding: env(safe-area-inset-top, 0px) calc(4px + env(safe-area-inset-right, 0px))
+                              env(safe-area-inset-bottom, 0px) calc(4px + env(safe-area-inset-left, 0px)); }
+  body.dotyk canvas { touch-action: none; flex: 0 0 auto; max-width: none; width: var(--platno, 50vw);
                       height: auto; border-radius: 10px; }
   body.dotyk .panel { display: flex; flex-direction: column; align-items: center; justify-content: center;
                       gap: 14px; width: var(--panel); flex: 0 0 var(--panel); }
-  body { --panel: clamp(110px, calc(var(--sirka, 100vw) * 0.18), 220px); }
+  body { --panel: 150px; --male: 52px; }
   #kriz { position: relative; width: var(--panel); height: var(--panel); border-radius: 50%;
           background: #ffffff22 url(obrazky/ovladani.png) center / 82% no-repeat; touch-action: none; }
   #kriz .stred { position: absolute; width: 34%; height: 34%; border-radius: 50%; left: 33%; top: 33%;
@@ -69,15 +70,13 @@
                  color: #222; font: bold 16px/26px system-ui, sans-serif; border: 2px solid #fff; }
   #utok.stisk { transform: scale(0.9) translateY(4px); filter: drop-shadow(0 1px 0 #0006) brightness(1.25); }
   .male { display: flex; gap: 10px; }
-  .male button, .levy-male button { width: 52px; height: 52px; border-radius: 14px; border: none; font-size: 24px;
+  .male button, .levy-male button { width: var(--male); height: var(--male); border-radius: 14px; border: none; font-size: calc(var(--male) * 0.46);
                  background: #ffffff2a; color: #fff; touch-action: manipulation; }
   .levy-male { display: flex; gap: 10px; }
   /* na výšku: hra nahoře, ovládání pod ní */
-  @media (orientation: portrait) {
-    body.dotyk #obal { flex-wrap: wrap; align-content: center; gap: 18px 10px; }
-    body.dotyk canvas { order: -1; width: calc(var(--sirka, 100vw) - 16px); flex-basis: 100%; }
-    body.dotyk .panel { width: 45vw; flex: 0 0 45vw; --panel: min(42vw, 230px); }
-  }
+  body.dotyk.navysku #obal { flex-wrap: wrap; align-content: center; gap: 18px 10px; }
+  body.dotyk.navysku canvas { order: -1; }
+  body.dotyk.navysku .panel { width: 46%; flex: 0 0 46%; }
 </style>
 </head>
 <body>
@@ -365,7 +364,7 @@ function nastavOvladani(naDotyk) {
   dotyk = naDotyk;
   document.body.classList.toggle('dotyk', dotyk);
   document.documentElement.classList.toggle('dotyk', dotyk);
-  zmerOkno();
+  posledniRozmer = ''; requestAnimationFrame(() => zmerOkno());
   try { localStorage.setItem('letadylko-ovladani', dotyk ? '1' : '0'); } catch (e) {}
   stav = 'menu'; hrajZvuk('start');
 }
@@ -446,15 +445,45 @@ window.addEventListener('blur', () => { krizPustit(); klavesy[' '] = false; });
 //  Na mobilu nesmí stránka „ujet“: žádné přibližování dvojím ťuknutím,
 //  žádné posouvání a velikost se měří podle skutečného okna.
 // ---------------------------------------------------------------------
+// Rozložení se počítá podle skutečně viditelné plochy (iPhone při spuštění z ikony
+// hlásí velikost okna nespolehlivě, proto měříme přímo připravený rámeček).
+const obal = document.getElementById('obal');
+let posledniRozmer = '';
 function zmerOkno() {
-  const r = document.documentElement.style;
-  r.setProperty('--sirka', window.innerWidth + 'px');
-  r.setProperty('--vyska', window.innerHeight + 'px');
-  if (dotyk) window.scrollTo(0, 0);
+  if (!dotyk) { canvas.style.removeProperty('--platno'); return; }
+  window.scrollTo(0, 0);
+  const r = obal.getBoundingClientRect(), cs = getComputedStyle(obal);
+  const pad = k => parseFloat(cs[k]) || 0;
+  const w = r.width - pad('paddingLeft') - pad('paddingRight');
+  const h = r.height - pad('paddingTop') - pad('paddingBottom');
+  if (w < 50 || h < 50) return;
+  const klic = Math.round(w) + 'x' + Math.round(h);
+  if (klic === posledniRozmer) return;
+  posledniRozmer = klic;
+  const nasirku = w >= h;
+  document.body.classList.toggle('navysku', !nasirku);
+  let panel, male, platno;
+  if (nasirku) {
+    male = Math.max(38, Math.min(56, h * 0.13));
+    panel = Math.min(220, w * 0.18, (h - male - 40) / 1.56);          // pravý sloupec: raketa + ÚTOK + malá tlačítka
+    panel = Math.max(80, panel);
+    platno = Math.min(w - 2 * panel - 36, (h - 8) * 16 / 9);
+  } else {
+    platno = Math.min(w - 8, h * 0.45 * 16 / 9);
+    male = Math.max(38, Math.min(56, w * 0.13));
+    const zbyva = h - platno * 9 / 16 - 30;
+    panel = Math.max(80, Math.min(230, w * 0.42, (zbyva - male - 40) / 1.56));
+  }
+  document.body.style.setProperty('--panel', Math.floor(panel) + 'px');
+  document.body.style.setProperty('--male', Math.floor(male) + 'px');
+  document.body.style.setProperty('--platno', Math.floor(Math.max(200, platno)) + 'px');
 }
-zmerOkno();
-['resize', 'orientationchange'].forEach(t => window.addEventListener(t, () => { zmerOkno(); setTimeout(zmerOkno, 300); }));
-if (window.visualViewport) window.visualViewport.addEventListener('resize', zmerOkno);
+['resize', 'orientationchange', 'pageshow'].forEach(t => window.addEventListener(t, () => {
+  posledniRozmer = ''; zmerOkno(); setTimeout(() => { posledniRozmer = ''; zmerOkno(); }, 350); setTimeout(zmerOkno, 1000);
+}));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { posledniRozmer = ''; zmerOkno(); });
+if (window.ResizeObserver) new ResizeObserver(() => zmerOkno()).observe(obal);
+setInterval(zmerOkno, 1000);                                       // pojistka: kontrola každou sekundu
 const mimoPodpis = e => !(e.target && e.target.closest && e.target.closest('#podpis'));
 // v dotykovém režimu zakážeme prohlížeči posouvat a přibližovat stránku
 ['touchstart', 'touchmove'].forEach(t => document.addEventListener(t, e => {
