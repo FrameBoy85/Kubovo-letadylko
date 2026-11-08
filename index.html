@@ -2,7 +2,7 @@
 <html lang="cs">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Kubíkovo letadýlko</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="ikona-192.png">
@@ -36,16 +36,19 @@
   #preskocit { background: #e0e0e0; color: #333; }
 
   /* ===== DOTYKOVÝ REŽIM: ovládání vedle hry, aby nezakrývalo obraz ===== */
-  body.dotyk { height: 100vh; height: 100dvh; overflow: hidden; touch-action: none;
+  html.dotyk { position: fixed; inset: 0; overflow: hidden; overscroll-behavior: none; }
+  body.dotyk { position: fixed; inset: 0; margin: 0; width: var(--sirka, 100vw); height: var(--vyska, 100vh); overflow: hidden; overscroll-behavior: none; touch-action: none;
                -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   body.dotyk h1, body.dotyk .help { display: none; }
-  body.dotyk #obal { height: 100%; gap: 10px; padding: 0 8px; box-sizing: border-box; }
+  body.dotyk #obal { height: 100%; gap: 10px; box-sizing: border-box;
+                    padding: 0 calc(8px + var(--okrajP, 0px)) 0 calc(8px + var(--okrajL, 0px)); }
+  body { --okrajL: env(safe-area-inset-left, 0px); --okrajP: env(safe-area-inset-right, 0px); }
   body.dotyk canvas { touch-action: none; flex: 0 1 auto; max-width: none;
-                      width: min(calc(100vw - 2 * var(--panel) - 36px), calc((100dvh - 12px) * 16 / 9));
+                      width: min(calc(var(--sirka, 100vw) - 2 * var(--panel) - 36px - var(--okrajL, 0px) - var(--okrajP, 0px)), calc((var(--vyska, 100vh) - 12px) * 16 / 9));
                       height: auto; border-radius: 10px; }
   body.dotyk .panel { display: flex; flex-direction: column; align-items: center; justify-content: center;
                       gap: 14px; width: var(--panel); flex: 0 0 var(--panel); }
-  body { --panel: clamp(110px, 18vw, 220px); }
+  body { --panel: clamp(110px, calc(var(--sirka, 100vw) * 0.18), 220px); }
   #kriz { position: relative; width: var(--panel); height: var(--panel); border-radius: 50%;
           background: #ffffff22 url(obrazky/ovladani.png) center / 82% no-repeat; touch-action: none; }
   #kriz .stred { position: absolute; width: 34%; height: 34%; border-radius: 50%; left: 33%; top: 33%;
@@ -72,7 +75,7 @@
   /* na výšku: hra nahoře, ovládání pod ní */
   @media (orientation: portrait) {
     body.dotyk #obal { flex-wrap: wrap; align-content: center; gap: 18px 10px; }
-    body.dotyk canvas { order: -1; width: calc(100vw - 16px); flex-basis: 100%; }
+    body.dotyk canvas { order: -1; width: calc(var(--sirka, 100vw) - 16px); flex-basis: 100%; }
     body.dotyk .panel { width: 45vw; flex: 0 0 45vw; --panel: min(42vw, 230px); }
   }
 </style>
@@ -191,6 +194,7 @@ let stav = 'volba';           // 'volba' (klávesnice/dotyk), 'menu', 'hra', 'pa
 let dotyk = false;            // hraje se na dotykové obrazovce?
 let volbaOvladani = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window) ? 1 : 0;
 let vybraneLetadlo = 0;       // které ze 6 letadel hráč vybral
+let rychleTuknuti = false;    // krátké ťuknutí na ÚTOK vystřelí, i když prst hned zvedneš
 let stitCas = 0, rakety = 0, bonusy = [], leticiRakety = [];
 let hrac, strely, nepratele, strelyNepratel, balony, kose, trosky, dolary, castice, napisy;
 let level = 1, skore = 0, zivoty = 0, posun = 0, cas = 0, nesmrtelnost = 0, prodleva = 0, otres = 0, konecZa = 0;
@@ -249,7 +253,7 @@ function mysNaPlatne(e) {
 const VOLBY = [{ x: 150, y: 170, w: 300, h: 230 }, { x: 510, y: 170, w: 300, h: 230 }];
 const START = { x: 650, y: 448, w: 230, h: 66 };
 const uvnitr = (m, p) => m.x > p.x && m.x < p.x + p.w && m.y > p.y && m.y < p.y + p.h;
-canvas.addEventListener('click', e => {
+canvas.addEventListener('pointerup', e => {
   zapniAudio();
   const m = mysNaPlatne(e);
   if (stav === 'volba') {
@@ -360,6 +364,8 @@ function kresliTabulku(x, y) {
 function nastavOvladani(naDotyk) {
   dotyk = naDotyk;
   document.body.classList.toggle('dotyk', dotyk);
+  document.documentElement.classList.toggle('dotyk', dotyk);
+  zmerOkno();
   try { localStorage.setItem('letadylko-ovladani', dotyk ? '1' : '0'); } catch (e) {}
   stav = 'menu'; hrajZvuk('start');
 }
@@ -405,7 +411,7 @@ utok.addEventListener('pointerdown', e => {
   if (ceka) return;
   if (stav === 'menu' || stav === 'konec') { novaHra(); return; }
   if (stav === 'pauza') stav = 'hra';
-  klavesy[' '] = true;
+  klavesy[' '] = true; rychleTuknuti = true;
 });
 ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(t => utok.addEventListener(t, () => { klavesy[' '] = false; utok.classList.remove('stisk'); }));
 
@@ -423,10 +429,10 @@ raketaTl.addEventListener('pointerdown', e => {
 
 // Malá tlačítka
 const tlZvuk = document.getElementById('tlZvuk');
-document.getElementById('tlPauza').addEventListener('click', () => { if (stav === 'hra') stav = 'pauza'; else if (stav === 'pauza') stav = 'hra'; });
-tlZvuk.addEventListener('click', () => { zapniAudio(); zvukZapnuty = !zvukZapnuty; tlZvuk.textContent = zvukZapnuty ? '🔊' : '🔇'; });
-document.getElementById('tlMenu').addEventListener('click', () => { stav = stav === 'menu' ? 'volba' : 'menu'; krizPustit(); });
-document.getElementById('tlCelaObrazovka').addEventListener('click', () => {
+document.getElementById('tlPauza').addEventListener('pointerup', () => { if (stav === 'hra') stav = 'pauza'; else if (stav === 'pauza') stav = 'hra'; });
+tlZvuk.addEventListener('pointerup', () => { zapniAudio(); zvukZapnuty = !zvukZapnuty; tlZvuk.textContent = zvukZapnuty ? '🔊' : '🔇'; });
+document.getElementById('tlMenu').addEventListener('pointerup', () => { stav = stav === 'menu' ? 'volba' : 'menu'; krizPustit(); });
+document.getElementById('tlCelaObrazovka').addEventListener('pointerup', () => {
   try {
     const el = document.documentElement;
     if (document.fullscreenElement) document.exitFullscreen();
@@ -435,6 +441,28 @@ document.getElementById('tlCelaObrazovka').addEventListener('click', () => {
 });
 // když prst sjede mimo nebo se okno přepne, ať letadlo „nezamrzne“ v pohybu
 window.addEventListener('blur', () => { krizPustit(); klavesy[' '] = false; });
+
+// ---------------------------------------------------------------------
+//  Na mobilu nesmí stránka „ujet“: žádné přibližování dvojím ťuknutím,
+//  žádné posouvání a velikost se měří podle skutečného okna.
+// ---------------------------------------------------------------------
+function zmerOkno() {
+  const r = document.documentElement.style;
+  r.setProperty('--sirka', window.innerWidth + 'px');
+  r.setProperty('--vyska', window.innerHeight + 'px');
+  if (dotyk) window.scrollTo(0, 0);
+}
+zmerOkno();
+['resize', 'orientationchange'].forEach(t => window.addEventListener(t, () => { zmerOkno(); setTimeout(zmerOkno, 300); }));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', zmerOkno);
+const mimoPodpis = e => !(e.target && e.target.closest && e.target.closest('#podpis'));
+// v dotykovém režimu zakážeme prohlížeči posouvat a přibližovat stránku
+['touchstart', 'touchmove'].forEach(t => document.addEventListener(t, e => {
+  if (dotyk && mimoPodpis(e) && e.cancelable) e.preventDefault();
+}, { passive: false }));
+document.addEventListener('touchend', e => { if (dotyk && mimoPodpis(e) && e.cancelable) e.preventDefault(); }, { passive: false });
+['gesturestart', 'gesturechange', 'dblclick'].forEach(t => document.addEventListener(t, e => { if (dotyk) e.preventDefault(); }, { passive: false }));
+window.addEventListener('scroll', () => { if (dotyk && (window.scrollX || window.scrollY)) window.scrollTo(0, 0); });
 
 // Políčka pro výběr letadla v menu (3 × 2)
 const POLICKA = [];
@@ -660,7 +688,8 @@ function aktualizuj(dt) {
     hrac.x = Math.max(0, Math.min(W - hrac.w, hrac.x));
     hrac.y = Math.max(0, Math.min(H - hrac.h, hrac.y));
     prodleva -= dt;
-    if (klavesy[' '] && prodleva <= 0) {
+    if ((klavesy[' '] || rychleTuknuti) && prodleva <= 0) {
+      rychleTuknuti = false;
       strely.push({ x: hrac.x + hrac.w - 10, y: hrac.y + hrac.h / 2 - 3, w: 22, h: 6 });
       prodleva = NASTAVENI.prodlevaStrelby;
       hrajZvuk('strela');
