@@ -83,6 +83,7 @@
   .male button, .levy-male button { width: var(--male); height: var(--male); border-radius: 14px; border: none; font-size: calc(var(--male) * 0.46);
                  background: #ffffff2a; color: #fff; touch-action: manipulation; }
   .levy-male { display: flex; gap: 10px; }
+  #tlHudba.vyp { opacity: .35; text-decoration: line-through; }
   /* na výšku: hra nahoře, ovládání pod ní */
   body.dotyk.navysku #obal { flex-wrap: wrap; align-content: center; gap: 18px 10px; }
   body.dotyk.navysku canvas { order: -1; }
@@ -100,7 +101,7 @@
   <div class="panel" id="pravyPanel">
     <button id="raketaTl" aria-label="Raketa"><span id="raketaPocet">0</span></button>
     <button id="utok">ÚTOK!</button>
-    <div class="male"><button id="tlPauza" aria-label="Pauza">⏸</button><button id="tlZvuk" aria-label="Zvuk">🔊</button></div>
+    <div class="male"><button id="tlPauza" aria-label="Pauza">⏸</button><button id="tlZvuk" aria-label="Zvuk">🔊</button><button id="tlHudba" aria-label="Hudba">🎵</button></div>
   </div>
 </div>
 <!-- okno pro podpis rekordmana -->
@@ -123,7 +124,7 @@
     <div class="tlacitka"><button type="button" id="ukoncitAno" class="ano">Ano, ukončit</button><button type="button" id="ukoncitNe" class="ne">Ne, hrát dál</button></div>
   </div>
 </div>
-<div class="help">⬆️⬇️⬅️➡️ létání &nbsp;·&nbsp; Mezerník = ÚTOK &nbsp;·&nbsp; R = raketa &nbsp;·&nbsp; P = pauza &nbsp;·&nbsp; M = zvuk &nbsp;·&nbsp; Esc = ukončit hru &nbsp;·&nbsp; T = rekordy (v menu)</div>
+<div class="help">⬆️⬇️⬅️➡️ létání &nbsp;·&nbsp; Mezerník = ÚTOK &nbsp;·&nbsp; R = raketa &nbsp;·&nbsp; P = pauza &nbsp;·&nbsp; M = zvuk &nbsp;·&nbsp; H = hudba &nbsp;·&nbsp; Esc = ukončit hru &nbsp;·&nbsp; T = rekordy (v menu)</div>
 
 <script>
 // =====================================================================
@@ -134,13 +135,14 @@ const NASTAVENI = {
   rychlostStrely: 12,      // jak rychle letí střely
   prodlevaStrelby: 14,     // čím menší číslo, tím rychleji střílíme
   rychlostSveta: 3,        // jak rychle ubíhá město
-  zivoty: 3,               // kolik máme srdíček
+  zivoty: 3,               // kolik máme srdíček na začátku
+  maxZivotu: 4,            // víc srdíček mít nejde
+  srdcePlne: 200,          // kolik dolarů dá bonusové srdíčko, když jsou srdíčka plná
   dolarVolny: 5,           // samostatně visící dolar
   dolarBalon: 10,          // dolar z prasklého balónu
   dolarLetadlo: 20,        // dolar ze sestřeleného letadla
   dolarPtak: 10,           // dolar ze sestřeleného ptáka
   dolaruNaLevel: 1000,     // kolik dolarů je potřeba na další level
-  sanceNaBombu: 0.35,      // jak často je v řadě dolarů schovaná bomba (0 = nikdy, 1 = vždy)
   delkaStitu: 10,          // kolik sekund drží štít
   raketZaBonus: 3,         // kolik raket dá jeden bonus
   bonusCasto: 0.0013,      // jak často přiletí bonus (štít nebo raketa)
@@ -148,13 +150,21 @@ const NASTAVENI = {
 
 // LEVELY – čím vyšší level, tím rychlejší hra a víc nepřátel
 function parametryLevelu(level) {
-  const l = Math.min(level, 8) - 1;
+  const l = Math.min(level, 15) - 1;
   return {
-    rychlost: 0.9 + l * 0.1,             // level 1 je o 10 % pomalejší
-    nepratele: 0.005 + l * 0.0025,       // jak často přilétají nepřátelé
-    balony: 0.004 + l * 0.001,
-    strelbaNepratel: 1 + l * 0.2,        // jak často nepřátelé střílejí
+    rychlost: 0.9 + Math.min(level - 1, 9) * 0.1 + Math.max(0, Math.min(level, 30) - 10) * 0.05,   // do 10. levelu +10 %, potom +5 %
+    nepratele: 0.005 + l * 0.002,                      // jak často přilétají nepřátelé
+    balony: 0.004 + l * 0.0008,                        // balóny / ptáci
+    strelbaNepratel: 1 + l * 0.3,                      // nepřátelé střílejí čím dál víc
+    mireneStrely: Math.min(0.7, l * 0.15),             // část střel míří přímo na hráče
+    bomby: level < 2 ? 0 : Math.min(0.85, 0.3 + (level - 2) * 0.12),   // 1. level bez bomb
+    bombVRade: level >= 5 ? 2 : 1,                      // od 5. levelu až 2 bomby v řadě
   };
+}
+// Kam se nová věc objeví: často přímo ve výšce hráče, jinak kdekoli – aby se nedalo schovat u okraje
+function vyskaPrichodu(h) {
+  if (hrac && Math.random() < 0.45) return Math.max(0, Math.min(H - h, hrac.y + hrac.h / 2 - h / 2 + nahodne(-40, 40)));
+  return nahodne(0, H - h);
 }
 
 const canvas = document.getElementById('hra');
@@ -167,8 +177,9 @@ const W = canvas.width, H = canvas.height;
 function nacti(cesta) { const i = new Image(); i.src = cesta; return i; }
 const LETADLA = [1, 2, 3, 4, 5, 6].map(c => nacti(`obrazky/letadlo${c}.png`));
 const MESTO = [nacti('obrazky/mesto.jpg'), ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(c => nacti(`obrazky/mesto${c}.jpg`))];
-const HORY = [nacti('obrazky/hory1.jpg'), nacti('obrazky/hory2.jpg')];   // Kubovy hory (sudé levely)
+const HORY = [1, 2, 3, 4].map(c => nacti(`obrazky/hory${c}.jpg`));   // Kubovy hory (sudé levely)
 const obrazky = {
+  srdce: nacti('obrazky/srdicko.png'),
   ptak: nacti('obrazky/ptak.png'),
   bomba: nacti('obrazky/bomba.png'),
   stit: nacti('obrazky/stit.png'),
@@ -227,6 +238,7 @@ let volbaOvladani = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window) ?
 let vybraneLetadlo = 0;       // které ze 6 letadel hráč vybral
 let rychleTuknuti = false;    // krátké ťuknutí na ÚTOK vystřelí, i když prst hned zvedneš
 let ptaci = [];
+let srdceDano = false, srdceProgres = 0.5, srdceCekani = 0;   // jedno bonusové srdíčko za level
 let stitCas = 0, rakety = 0, bonusy = [], leticiRakety = [];
 let hrac, strely, nepratele, strelyNepratel, balony, kose, trosky, dolary, castice, napisy;
 let level = 1, skore = 0, zivoty = 0, posun = 0, cas = 0, nesmrtelnost = 0, prodleva = 0, otres = 0, konecZa = 0;
@@ -240,7 +252,7 @@ function novaHra() {
   strely = []; nepratele = []; strelyNepratel = []; balony = []; kose = []; trosky = [];
   stitCas = 0; rakety = 0; bonusy = []; leticiRakety = []; aktualizujTlacitkoRakety();
   dolary = []; castice = []; napisy = [];
-  level = 1; pozadiTed = MESTO; pozadiPred = null; prechodPozadi = 0; ptaci = [];
+  level = 1; srdceDano = false; srdceProgres = nahodne(0.3, 0.9); srdceCekani = 0; pozadiTed = MESTO; pozadiPred = null; prechodPozadi = 0; ptaci = [];
   skore = 0; zivoty = NASTAVENI.zivoty; cas = 0; nesmrtelnost = 0; prodleva = 0; otres = 0; konecZa = 0;
   stav = 'hra';
   hrajZvuk('start');
@@ -256,6 +268,7 @@ window.addEventListener('keydown', e => {
   klavesy[e.key] = true;
   zapniAudio();
   if (e.key === 'm' || e.key === 'M') zvukZapnuty = !zvukZapnuty;
+  if (e.key === 'h' || e.key === 'H') prepniHudbu();
   if (stav === 'volba') {
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) { volbaOvladani = 1 - volbaOvladani; hrajZvuk('blip'); }
     if (e.key === ' ' || e.key === 'Enter') { nastavOvladani(volbaOvladani === 1); klavesy[' '] = false; }
@@ -474,6 +487,8 @@ raketaTl.addEventListener('pointerdown', e => {
 // Malá tlačítka
 const tlZvuk = document.getElementById('tlZvuk');
 document.getElementById('tlPauza').addEventListener('pointerup', () => { if (stav === 'hra') stav = 'pauza'; else if (stav === 'pauza') stav = 'hra'; });
+document.getElementById('tlHudba').addEventListener('pointerup', () => { zapniAudio(); prepniHudbu(); });
+setTimeout(() => document.getElementById('tlHudba').classList.toggle('vyp', !hudbaZapnuta), 0);
 tlZvuk.addEventListener('pointerup', () => { zapniAudio(); zvukZapnuty = !zvukZapnuty; tlZvuk.textContent = zvukZapnuty ? '🔊' : '🔇'; });
 document.getElementById('tlMenu').addEventListener('pointerup', () => {
   krizPustit();
@@ -536,10 +551,12 @@ function zmerOkno() {
     male = Math.max(38, Math.min(56, h * 0.13));
     panel = Math.min(220, w * 0.18, (h - male - 40) / 1.56);          // pravý sloupec: raketa + ÚTOK + malá tlačítka
     panel = Math.max(80, panel);
+    male = Math.max(34, Math.min(male, (panel - 16) / 3));              // tři malá tlačítka se musí vejít vedle sebe
     platno = Math.min(w - 2 * panel - 36, (h - 8) * 16 / 9);
   } else {
     platno = Math.min(w - 8, h * 0.45 * 16 / 9);
     male = Math.max(38, Math.min(56, w * 0.13));
+    male = Math.max(34, Math.min(male, (w * 0.46 - 16) / 3));
     const zbyva = h - platno * 9 / 16 - 30;
     panel = Math.max(80, Math.min(230, w * 0.42, (zbyva - male - 40) / 1.56));
   }
@@ -662,6 +679,7 @@ function hrajZvuk(co) {
       [392, 370, 349].forEach((f, i) => ton(f, f * 0.97, 0.35, 'sawtooth', 0.15, i * 0.4, 4));
       ton(330, 300, 1.1, 'sawtooth', 0.15, 1.2, 9); break;
     case 'blip': ton(660, 880, 0.06, 'square', 0.08); break;
+    case 'srdce': [523, 659, 784, 1047, 1319].forEach((f, i) => ton(f, f, 0.16, 'sine', 0.25, i * 0.07)); break;
     case 'slepice':                                   // nakopnutá slepice: kok-kok-KOKODÁÁÁK!
       ton(650, 1050, 0.06, 'sawtooth', 0.16, 0, 30); ton(700, 1100, 0.06, 'sawtooth', 0.16, 0.09, 30);
       ton(850, 1700, 0.11, 'sawtooth', 0.22, 0.2, 90); sum(0.08, 0.25, 3000, 1800, 'bandpass', 0.2);
@@ -693,6 +711,58 @@ function aktualizujMotor() {
   motor.o.frequency.setTargetAtTime(motor.f * plyn, audio.currentTime, 0.15);
 }
 
+
+// ---------------------------------------------------------------------
+//  HUDBA – dvě vlastní melodie (město a hory), skládané přímo v prohlížeči
+// ---------------------------------------------------------------------
+let hudbaZapnuta = true;
+try { hudbaZapnuta = localStorage.getItem('letadylko-hudba') !== '0'; } catch (e) {}
+const _ = null;
+const PISNE = {
+  mesto: { tempo: 128, vlna: 'square', hlasitost: 0.03, bas: [48, 45, 41, 43],          // C – Am – F – G
+    melodie: [[72,_,76,_,79,_,76,_,77,_,76,_,74,_,72,_], [69,_,72,_,76,_,72,_,74,_,72,_,71,_,69,_],
+              [65,_,69,_,72,_,74,_,72,_,69,_,72,_,74,_], [67,_,71,_,74,_,79,_,77,_,74,_,71,_,_,_]] },
+  hory:  { tempo: 116, vlna: 'triangle', hlasitost: 0.07, bas: [43, 38, 36, 38],         // G – D – C – D (horská „jódlovačka“)
+    melodie: [[67,71,74,79,_,74,71,_,72,_,71,_,69,_,67,_], [66,69,74,78,_,74,69,_,71,_,69,_,67,_,66,_],
+              [64,67,72,76,_,72,67,_,69,_,71,_,72,_,74,_], [74,_,72,_,71,_,69,_,66,_,69,_,74,_,_,_]] },
+};
+const mFrek = m => 440 * Math.pow(2, (m - 69) / 12);
+let hudbaKrok = 0, hudbaCas = 0, hudbaPisen = null, hudbaVystup = null;
+function hudbaNota(f, t, delka, typ, vol) {
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = typ; o.frequency.setValueAtTime(f, t);
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + delka);
+  o.connect(g); g.connect(hudbaVystup); o.start(t); o.stop(t + delka + 0.02);
+}
+function hudbaTik() {
+  if (!audio || audio.state !== 'running') return;
+  if (!hudbaVystup) {
+    hudbaVystup = audio.createBiquadFilter(); hudbaVystup.type = 'lowpass'; hudbaVystup.frequency.value = 2600;
+    hudbaVystup.connect(hlasitost);
+  }
+  if (!hudbaZapnuta || stav !== 'hra') { hudbaCas = 0; return; }
+  const pisen = jsouHory(level) ? PISNE.hory : PISNE.mesto;
+  if (pisen !== hudbaPisen) { hudbaPisen = pisen; hudbaKrok = 0; hudbaCas = 0; }
+  const krok = 60 / pisen.tempo / 4;
+  if (hudbaCas < audio.currentTime) hudbaCas = audio.currentTime + 0.05;
+  while (hudbaCas < audio.currentTime + 0.3) {
+    const takt = Math.floor(hudbaKrok / 16) % 4, s = hudbaKrok % 16;
+    const m = pisen.melodie[takt][s];
+    if (m !== null) hudbaNota(mFrek(m), hudbaCas, krok * 1.6, pisen.vlna, pisen.hlasitost);
+    const b = pisen.bas[takt];
+    if (s % 4 === 0) hudbaNota(mFrek(b), hudbaCas, krok * 2.5, 'triangle', 0.11);
+    if (s === 6 || s === 14) hudbaNota(mFrek(b + 12), hudbaCas, krok * 1.5, 'triangle', 0.07);
+    hudbaKrok = (hudbaKrok + 1) % 64; hudbaCas += krok;
+  }
+}
+setInterval(hudbaTik, 60);
+function prepniHudbu() {
+  hudbaZapnuta = !hudbaZapnuta;
+  try { localStorage.setItem('letadylko-hudba', hudbaZapnuta ? '1' : '0'); } catch (e) {}
+  const t = document.getElementById('tlHudba'); if (t) t.classList.toggle('vyp', !hudbaZapnuta);
+}
+
 // ---------------------------------------------------------------------
 //  Pomocné funkce
 // ---------------------------------------------------------------------
@@ -706,11 +776,14 @@ function srazka(a, b) {           // srážka dvou obdélníků (trochu zmenšen
 // Mezi volně visícími dolary se občas schová BOMBA – kdo ji sebere, přijde o život
 function pridejDolary(x, y, kolik, hodnota = NASTAVENI.dolarVolny) {
   const vel = hodnota >= 20 ? 58 : hodnota >= 10 ? 48 : 38;
-  const bombaNa = hodnota === NASTAVENI.dolarVolny && kolik >= 3 && Math.random() < NASTAVENI.sanceNaBombu
-    ? Math.floor(Math.random() * kolik) : -1;
-  for (let i = 0; i < kolik; i++)
-    dolary.push({ x: x + i * 46 - (vel - 42) / 2, y: y + Math.sin(i * 0.9) * 30 - (vel - 42) / 2, w: i === bombaNa ? 46 : vel,
-                  h: i === bombaNa ? 46 : vel, hodnota, bomba: i === bombaNa });
+  const lv = parametryLevelu(level), bomby = new Set();
+  if (hodnota === NASTAVENI.dolarVolny && kolik >= 3)
+    for (let b = 0; b < lv.bombVRade; b++) if (Math.random() < lv.bomby) bomby.add(Math.floor(Math.random() * kolik));
+  for (let i = 0; i < kolik; i++) {
+    const bomba = bomby.has(i);
+    dolary.push({ x: x + i * 46 - (vel - 42) / 2, y: y + Math.sin(i * 0.9) * 30 - (vel - 42) / 2, w: bomba ? 46 : vel,
+                  h: bomba ? 46 : vel, hodnota, bomba });
+  }
 }
 function napis(text, x, y, barva) { napisy.push({ text, x, y, barva, zivot: 50 }); }
 
@@ -804,13 +877,13 @@ function aktualizuj(dt) {
     const moznosti = LETADLA.filter((_, i) => i !== vybraneLetadlo);   // nepřátelé = ostatní letadla
     const img = moznosti[Math.floor(Math.random() * moznosti.length)];
     const vyska = 52, sirka = Math.max(60, Math.min(140, vyska * pomer(img, 1.8)));
-    nepratele.push({ img, x: W + 20, y: nahodne(20, H - 120), w: sirka, h: vyska, vx: nahodne(2, 3.5) * lv.rychlost, faze: nahodne(0, 6), strelba: nahodne(60, 160) });
+    nepratele.push({ img, x: W + 20, y: vyskaPrichodu(vyska), w: sirka, h: vyska, vx: nahodne(2, 3.5) * lv.rychlost, faze: nahodne(0, 6), strelba: nahodne(60, 160) });
   }
   if (Math.random() < lv.balony * dt && jsouHory(level))
-    ptaci.push({ x: W + 20, y: nahodne(20, H - 160), w: 92, h: 90, faze: nahodne(0, 6), vx: nahodne(1.2, 2.4) });
+    ptaci.push({ x: W + 20, y: vyskaPrichodu(90), w: 92, h: 90, faze: nahodne(0, 6), vx: nahodne(1.2, 2.4) });
   else if (Math.random() < lv.balony * dt && !jsouHory(level))
-    balony.push({ x: W + 20, y: nahodne(20, H - 200), w: 75, h: 146, faze: nahodne(0, 6) });
-  if (Math.random() < 0.008 * dt) pridejDolary(W + 20, nahodne(60, H - 120), Math.floor(nahodne(3, 6)));
+    balony.push({ x: W + 20, y: vyskaPrichodu(146), w: 75, h: 146, faze: nahodne(0, 6) });
+  if (Math.random() < 0.008 * dt) pridejDolary(W + 20, Math.max(30, Math.min(H - 70, vyskaPrichodu(42))), Math.floor(nahodne(3, 6)));
 
   // nepřátelé
   for (const n of nepratele) {
@@ -818,12 +891,17 @@ function aktualizuj(dt) {
     n.faze += 0.04 * dt; n.y += Math.sin(n.faze) * 1.2 * dt;
     n.strelba -= dt;
     if (n.strelba <= 0 && n.x < W - 50) {
-      strelyNepratel.push({ x: n.x, y: n.y + n.h / 2 - 4, w: 14, h: 8 });
+      const s = { x: n.x, y: n.y + n.h / 2 - 4, w: 14, h: 8, vy: 0 };
+      if (hrac.ziv && Math.random() < lv.mireneStrely && hrac.x < n.x) {      // mířená střela
+        const cas = (n.x - hrac.x) / (6 + rychlostSveta);
+        s.vy = Math.max(-4, Math.min(4, (hrac.y + hrac.h / 2 - s.y) / Math.max(cas, 1)));
+      }
+      strelyNepratel.push(s);
       n.strelba = nahodne(130, 260) / lv.strelbaNepratel;
     }
     if (hrac.ziv && srazka(hrac, n)) { n.znicen = true; sestrel(n); zasah(); }
   }
-  for (const s of strelyNepratel) { s.x -= (6 + rychlostSveta) * dt; if (hrac.ziv && srazka(hrac, s)) { s.pryc = true; zasah(); } }
+  for (const s of strelyNepratel) { s.x -= (6 + rychlostSveta) * dt; s.y += s.vy * dt; if (hrac.ziv && srazka(hrac, s)) { s.pryc = true; zasah(); } }
 
   // balóny pomalu stoupají a klesají
   for (const b of balony) {
@@ -868,16 +946,31 @@ function aktualizuj(dt) {
     for (const d of dolary) if (d.bomba && !d.sebrano && !s.pryc && srazka(s, d)) { d.sebrano = true; s.pryc = true; vybuch(d.x + d.w / 2, d.y + d.h / 2, 1); }
   }
 
+  // jedno bonusové srdíčko v každém levelu
+  // (přiletí hned, jak hráči zbude poslední srdce; jinak někdy během levelu)
+  if (!srdceDano && hrac.ziv) {
+    const postup = (skore - (level - 1) * NASTAVENI.dolaruNaLevel) / NASTAVENI.dolaruNaLevel;
+    if (zivoty === 1) srdceCekani += dt; else srdceCekani = 0;
+    if (srdceCekani > 90 || postup >= srdceProgres) {
+      srdceDano = true;
+      bonusy.push({ typ: 'srdce', x: W + 20, y: Math.max(30, Math.min(H - 100, hrac.y + nahodne(-60, 60))), faze: 0 });
+    }
+  }
   // bonusy: ŠTÍT a RAKETA
   if (Math.random() < NASTAVENI.bonusCasto * dt)
-    bonusy.push({ typ: Math.random() < 0.5 ? 'stit' : 'raketa', x: W + 20, y: nahodne(70, H - 120), faze: 0 });
+    bonusy.push({ typ: Math.random() < 0.5 ? 'stit' : 'raketa', x: W + 20, y: nahodne(10, H - 70), faze: 0 });
   for (const b of bonusy) {
     b.x -= rychlostSveta * dt; b.faze += 0.06 * dt;
-    b.w = b.typ === 'stit' ? 62 : 96; b.h = b.typ === 'stit' ? 56 : 48;
+    b.w = b.typ === 'stit' ? 62 : b.typ === 'srdce' ? 66 : 96; b.h = b.typ === 'stit' ? 56 : b.typ === 'srdce' ? 60 : 48;
     const kolize = { x: b.x, y: b.y + Math.sin(b.faze) * 8, w: b.w, h: b.h };
     if (hrac.ziv && srazka(hrac, kolize)) {
-      b.sebrano = true; hrajZvuk('bonus');
-      if (b.typ === 'stit') { stitCas = NASTAVENI.delkaStitu * 60; napis('ŠTÍT!', b.x + b.w / 2, b.y, '#90caf9'); }
+      b.sebrano = true; if (b.typ !== 'srdce') hrajZvuk('bonus');
+      if (b.typ === 'srdce') {
+        if (zivoty < NASTAVENI.maxZivotu) { zivoty++; napis('+1 srdíčko', b.x + b.w / 2, b.y, '#ff8a80'); }
+        else { skore += NASTAVENI.srdcePlne; napis('+' + NASTAVENI.srdcePlne + ' $', b.x + b.w / 2, b.y, '#ffeb3b');
+               while (skore >= level * NASTAVENI.dolaruNaLevel) dalsiLevel(); }
+        hrajZvuk('srdce');
+      } else if (b.typ === 'stit') { stitCas = NASTAVENI.delkaStitu * 60; napis('ŠTÍT!', b.x + b.w / 2, b.y, '#90caf9'); }
       else { rakety += NASTAVENI.raketZaBonus; napis('+' + NASTAVENI.raketZaBonus + ' RAKETY!', b.x + b.w / 2, b.y, '#ffcc80'); aktualizujTlacitkoRakety(); }
     }
   }
@@ -916,7 +1009,7 @@ function aktualizuj(dt) {
 
   // úklid věcí, které už nejsou potřeba
   strely = strely.filter(s => !s.pryc && s.x < W + 30);
-  strelyNepratel = strelyNepratel.filter(s => !s.pryc && s.x > -30);
+  strelyNepratel = strelyNepratel.filter(s => !s.pryc && s.x > -30 && s.y > -20 && s.y < H + 20);
   nepratele = nepratele.filter(n => !n.znicen && n.x > -150);
   balony = balony.filter(b => !b.znicen && b.x + b.w > -20);
   ptaci = ptaci.filter(p => !p.znicen && p.x + p.w > -20);
@@ -936,10 +1029,10 @@ function aktualizuj(dt) {
 // Další level! Jedno srdíčko navíc (když nějaké chybí) a velký nápis
 let levelNapis = 0;
 function dalsiLevel() {
-  level++; levelNapis = 150;
+  level++; levelNapis = 150; srdceDano = false; srdceProgres = nahodne(0.3, 0.9); srdceCekani = 0;
   const nove = jsouHory(level) ? HORY : MESTO;
   if (nove !== pozadiTed) { pozadiPred = pozadiTed; pozadiTed = nove; prechodPozadi = 120; }
-  if (zivoty < NASTAVENI.zivoty) zivoty++;
+  if (zivoty < NASTAVENI.maxZivotu) { zivoty++; napis('+1 srdíčko', W / 2, H / 2 + 60, '#ff8a80'); }
   hrajZvuk('level');
 }
 
@@ -1078,6 +1171,22 @@ function kresliRaketu(r) {
   ctx.restore();
 }
 
+// Červené srdíčko (střed x,y, velikost r)
+function kresliSrdicko(x, y, r) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.beginPath();
+  ctx.moveTo(0, r * 0.95);
+  ctx.bezierCurveTo(-r * 1.25, r * 0.15, -r * 1.05, -r * 0.95, -r * 0.45, -r * 0.9);
+  ctx.bezierCurveTo(-r * 0.15, -r * 0.88, 0, -r * 0.6, 0, -r * 0.45);
+  ctx.bezierCurveTo(0, -r * 0.6, r * 0.15, -r * 0.88, r * 0.45, -r * 0.9);
+  ctx.bezierCurveTo(r * 1.05, -r * 0.95, r * 1.25, r * 0.15, 0, r * 0.95);
+  ctx.closePath();
+  ctx.fillStyle = '#e53935'; ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = '#3b0d0d'; ctx.stroke();
+  ctx.fillStyle = '#ffffff99'; ctx.beginPath(); ctx.ellipse(-r * 0.45, -r * 0.4, r * 0.22, r * 0.14, -0.6, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
 function kresliMenu() {
   ctx.fillStyle = '#0005'; ctx.fillRect(0, 0, W, H);
   // tlačítko s tabulkou rekordů
@@ -1137,7 +1246,7 @@ function vykresli() {
     const y = b.y + Math.sin(b.faze) * 8;
     ctx.save(); ctx.globalAlpha = 0.35 + Math.sin(b.faze * 2) * 0.15; ctx.fillStyle = '#fff';
     ctx.beginPath(); ctx.ellipse(b.x + b.w / 2, y + b.h / 2, b.w * 0.7, b.h * 0.8, 0, 0, 7); ctx.fill(); ctx.restore();
-    nakresli(b.typ === 'stit' ? obrazky.stit : obrazky.raketa, b.x, y, b.w, b.h);
+    nakresli(b.typ === 'stit' ? obrazky.stit : b.typ === 'srdce' ? obrazky.srdce : obrazky.raketa, b.x, y, b.w, b.h);
   }
   for (const r of leticiRakety) kresliRaketu(r);
   for (const n of nepratele) nakresli(n.img, n.x, n.y, n.w, n.h, true, -Math.sin(n.faze) * 0.15);
@@ -1190,10 +1299,11 @@ function vykresli() {
   // skóre a životy
   ctx.fillStyle = '#0006';
   ctx.beginPath(); ctx.roundRect(8, 8, 170, 46, 12); ctx.fill();
-  ctx.beginPath(); ctx.roundRect(W - 8 - 40 * NASTAVENI.zivoty - 16, 8, 40 * NASTAVENI.zivoty + 16, 46, 12); ctx.fill();
+  const sz = Math.max(NASTAVENI.zivoty, zivoty);
+  ctx.beginPath(); ctx.roundRect(W - 8 - 36 * sz - 16, 8, 36 * sz + 16, 46, 12); ctx.fill();
   nakresli(obrazky.dolar, 16, 12, 38, 38);
   text(String(skore), 62, 31, 28, '#ffeb3b', 'left');
-  text('❤️'.repeat(Math.max(0, zivoty)), W - 20, 31, 26, '#fff', 'right');
+  for (let i = 0; i < zivoty; i++) kresliSrdicko(W - 8 - 16 - 36 * i - 15, 31, 15);
   let hy = 62;
   if (stitCas > 0) {
     ctx.fillStyle = '#0006'; ctx.beginPath(); ctx.roundRect(W - 128, hy, 120, 40, 12); ctx.fill();
@@ -1217,7 +1327,7 @@ function vykresli() {
     const s = 1 + Math.max(0, levelNapis - 130) / 20;
     ctx.globalAlpha = Math.min(1, levelNapis / 30);
     text('LEVEL ' + level + '!', W / 2, H / 2 - 40, 70 * s, '#ffeb3b');
-    text('Rychlejší a víc nepřátel!', W / 2, H / 2 + 20, 26);
+    text(level === 2 ? 'Pozor, v dolarech jsou bomby!' : 'Rychlejší a víc nepřátel!', W / 2, H / 2 + 20, 26);
     ctx.globalAlpha = 1;
   }
 
