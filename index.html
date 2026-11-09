@@ -174,7 +174,11 @@ const W = canvas.width, H = canvas.height;
 // ---------------------------------------------------------------------
 //  Kubovy obrázky (fotky lega a kresby) ze složky "obrazky"
 // ---------------------------------------------------------------------
-function nacti(cesta) { const i = new Image(); i.src = cesta; return i; }
+function nacti(cesta) {
+  const i = new Image(); let pokusy = 0;
+  i.onerror = () => { if (++pokusy <= 3) setTimeout(() => { i.src = cesta + '?znovu=' + Date.now(); }, 1500 * pokusy); };
+  i.src = cesta; return i;
+}
 const LETADLA = [1, 2, 3, 4, 5, 6].map(c => nacti(`obrazky/letadlo${c}.png`));
 const MESTO = [nacti('obrazky/mesto.jpg'), ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(c => nacti(`obrazky/mesto${c}.jpg`))];
 const HORY = [1, 2, 3, 4].map(c => nacti(`obrazky/hory${c}.jpg`));   // Kubovy hory (sudé levely)
@@ -216,8 +220,10 @@ function kresliSadu(sada) {
   const x = posun * 0.5;
   let i = Math.floor(x / sirka);
   for (let sx = -(x % sirka); sx < W; sx += sirka, i++) {
-    const img = sada[((i % sada.length) + sada.length) % sada.length];
-    if (pripraven(img)) ctx.drawImage(img, Math.floor(sx), 0, Math.ceil(sirka) + 1, H);
+    const k = ((i % sada.length) + sada.length) % sada.length;
+    let img = sada[k];
+    if (!pripraven(img)) img = sada.find(pripraven);          // chybí-li obrázek, ukaž jiný úsek téhož pozadí
+    if (img) ctx.drawImage(img, Math.floor(sx), 0, Math.ceil(sirka) + 1, H);
     else { ctx.fillStyle = '#8fd0f5'; ctx.fillRect(sx, 0, sirka + 1, H); }
   }
 }
@@ -252,7 +258,7 @@ function novaHra() {
   strely = []; nepratele = []; strelyNepratel = []; balony = []; kose = []; trosky = [];
   stitCas = 0; rakety = 0; bonusy = []; leticiRakety = []; aktualizujTlacitkoRakety();
   dolary = []; castice = []; napisy = [];
-  level = 1; srdceDano = false; srdceProgres = nahodne(0.3, 0.9); srdceCekani = 0; pozadiTed = MESTO; pozadiPred = null; prechodPozadi = 0; ptaci = [];
+  level = 1; hudbaSkladba = -1; srdceDano = false; srdceProgres = nahodne(0.3, 0.9); srdceCekani = 0; pozadiTed = MESTO; pozadiPred = null; prechodPozadi = 0; ptaci = [];
   skore = 0; zivoty = NASTAVENI.zivoty; cas = 0; nesmrtelnost = 0; prodleva = 0; otres = 0; konecZa = 0;
   stav = 'hra';
   hrajZvuk('start');
@@ -601,6 +607,7 @@ function zapniAudio() {
       hlasitost = audio.createGain(); hlasitost.gain.value = 0.5; hlasitost.connect(audio.destination);
     }
     if (audio.state !== 'running') audio.resume().catch(() => {});
+    if (!hudbaOdemcena) odemkniHudbu();                 // hudbu odemykáme při každém dotyku, dokud se to nepovede
     if (odemceno && audio.state === 'running') return;
     // krátký prázdný zvuk přímo při dotyku „odemkne“ zvuk na iPhonu
     const b = audio.createBuffer(1, 1, 22050), src = audio.createBufferSource();
@@ -609,6 +616,7 @@ function zapniAudio() {
     if (!tichyZvuk) { tichyZvuk = new Audio(TICHO); tichyZvuk.loop = true; tichyZvuk.setAttribute('playsinline', ''); }
     const p = tichyZvuk.play(); if (p) p.catch(() => {});
     odemceno = audio.state === 'running';
+    odemkniHudbu();
   } catch (e) {}
 }
 ['touchstart', 'touchend', 'pointerdown', 'pointerup', 'click', 'keydown'].forEach(t =>
@@ -713,50 +721,50 @@ function aktualizujMotor() {
 
 
 // ---------------------------------------------------------------------
-//  HUDBA – dvě vlastní melodie (město a hory), skládané přímo v prohlížeči
+//  HUDBA – 1. level T Bless, 2. level Menuet (Kashido), 3. level Jingle Bells (Kashido), pak dokola
 // ---------------------------------------------------------------------
 let hudbaZapnuta = true;
 try { hudbaZapnuta = localStorage.getItem('letadylko-hudba') !== '0'; } catch (e) {}
-const _ = null;
-const PISNE = {
-  mesto: { tempo: 128, vlna: 'square', hlasitost: 0.03, bas: [48, 45, 41, 43],          // C – Am – F – G
-    melodie: [[72,_,76,_,79,_,76,_,77,_,76,_,74,_,72,_], [69,_,72,_,76,_,72,_,74,_,72,_,71,_,69,_],
-              [65,_,69,_,72,_,74,_,72,_,69,_,72,_,74,_], [67,_,71,_,74,_,79,_,77,_,74,_,71,_,_,_]] },
-  hory:  { tempo: 116, vlna: 'triangle', hlasitost: 0.07, bas: [43, 38, 36, 38],         // G – D – C – D (horská „jódlovačka“)
-    melodie: [[67,71,74,79,_,74,71,_,72,_,71,_,69,_,67,_], [66,69,74,78,_,74,69,_,71,_,69,_,67,_,66,_],
-              [64,67,72,76,_,72,67,_,69,_,71,_,72,_,74,_], [74,_,72,_,71,_,69,_,66,_,69,_,74,_,_,_]] },
-};
-const mFrek = m => 440 * Math.pow(2, (m - 69) / 12);
-let hudbaKrok = 0, hudbaCas = 0, hudbaPisen = null, hudbaVystup = null;
-function hudbaNota(f, t, delka, typ, vol) {
-  const o = audio.createOscillator(), g = audio.createGain();
-  o.type = typ; o.frequency.setValueAtTime(f, t);
-  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + delka);
-  o.connect(g); g.connect(hudbaVystup); o.start(t); o.stop(t + delka + 0.02);
+const SKLADBY = ['hudba/hudba1.mp3', 'hudba/hudba2.mp3', 'hudba/hudba3.mp3'];
+const SKLADBY_HLASITOST = [1, 1.35, 1];            // menuet je nahraný potišeji
+const HUDBA_HLASITOST = 0.35;                      // celková hlasitost hudby (0 až 1)
+const prehravac = new Audio();
+prehravac.loop = true; prehravac.preload = 'auto'; prehravac.setAttribute('playsinline', '');
+prehravac.volume = HUDBA_HLASITOST;                // záloha (iPhone hlasitost <audio> neumí měnit)
+let hudbaZdroj = null, hudbaGain = null, hudbaSkladba = -1, hudbaOdemcena = false;
+function pripojHudbu() {
+  if (!audio || hudbaZdroj) return;
+  try {
+    hudbaZdroj = audio.createMediaElementSource(prehravac);
+    hudbaGain = audio.createGain(); hudbaGain.gain.value = HUDBA_HLASITOST;
+    hudbaZdroj.connect(hudbaGain); hudbaGain.connect(hlasitost);
+    prehravac.volume = 1;
+  } catch (e) { hudbaZdroj = 'nejde'; }
+}
+// Mobil pustí hudbu jen po dotyku – při prvním dotyku přehrávač „odemkneme“
+function odemkniHudbu() {
+  pripojHudbu();
+  if (hudbaOdemcena) return;
+  hudbaOdemcena = true;
+  if (!prehravac.src) prehravac.src = SKLADBY[0];
+  const p = prehravac.play();
+  if (p) p.then(() => { if (!(hudbaZapnuta && stav === 'hra')) prehravac.pause(); }).catch(e => { console.warn('Hudbu zatím nejde pustit:', e && e.name); hudbaOdemcena = false; });
 }
 function hudbaTik() {
-  if (!audio || audio.state !== 'running') return;
-  if (!hudbaVystup) {
-    hudbaVystup = audio.createBiquadFilter(); hudbaVystup.type = 'lowpass'; hudbaVystup.frequency.value = 2600;
-    hudbaVystup.connect(hlasitost);
-  }
-  if (!hudbaZapnuta || stav !== 'hra') { hudbaCas = 0; return; }
-  const pisen = jsouHory(level) ? PISNE.hory : PISNE.mesto;
-  if (pisen !== hudbaPisen) { hudbaPisen = pisen; hudbaKrok = 0; hudbaCas = 0; }
-  const krok = 60 / pisen.tempo / 4;
-  if (hudbaCas < audio.currentTime) hudbaCas = audio.currentTime + 0.05;
-  while (hudbaCas < audio.currentTime + 0.3) {
-    const takt = Math.floor(hudbaKrok / 16) % 4, s = hudbaKrok % 16;
-    const m = pisen.melodie[takt][s];
-    if (m !== null) hudbaNota(mFrek(m), hudbaCas, krok * 1.6, pisen.vlna, pisen.hlasitost);
-    const b = pisen.bas[takt];
-    if (s % 4 === 0) hudbaNota(mFrek(b), hudbaCas, krok * 2.5, 'triangle', 0.11);
-    if (s === 6 || s === 14) hudbaNota(mFrek(b + 12), hudbaCas, krok * 1.5, 'triangle', 0.07);
-    hudbaKrok = (hudbaKrok + 1) % 64; hudbaCas += krok;
-  }
+  const chci = hudbaZapnuta && stav === 'hra' && hudbaOdemcena;
+  const idx = (level - 1) % SKLADBY.length;
+  if (chci) {
+    if (idx !== hudbaSkladba) {
+      hudbaSkladba = idx;
+      if (!prehravac.src.endsWith(SKLADBY[idx])) prehravac.src = SKLADBY[idx];
+      try { prehravac.currentTime = 0; } catch (e) {}
+    }
+    const v = HUDBA_HLASITOST * SKLADBY_HLASITOST[idx];
+    if (hudbaGain) hudbaGain.gain.value = v; else prehravac.volume = Math.min(1, v);
+    if (prehravac.paused) { const p = prehravac.play(); if (p) p.catch(() => {}); }
+  } else if (!prehravac.paused) prehravac.pause();
 }
-setInterval(hudbaTik, 60);
+setInterval(hudbaTik, 200);
 function prepniHudbu() {
   hudbaZapnuta = !hudbaZapnuta;
   try { localStorage.setItem('letadylko-hudba', hudbaZapnuta ? '1' : '0'); } catch (e) {}
@@ -1213,6 +1221,7 @@ function kresliMenu() {
     text('START ▶', START.x + START.w / 2, START.y + START.h / 2, 32, '#fff');
   } else text('Šipky = výběr   ·   Mezerník = start!', W / 2 + 40, 480, 26, '#ffeb3b');
   if (nejlepsi) text('Rekord: ' + nejlepsi + ' $', W / 2 + 40, 518, 20);
+  text('Hudba: T Bless · Kashido', W - 12, 530, 12, '#ddd', 'right');
 }
 
 function vykresli() {
