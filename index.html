@@ -22,7 +22,17 @@
   #obal { display: flex; align-items: center; justify-content: center; width: 100%; }
   .panel { display: none; }
   #podpis { position: fixed; inset: 0; background: #0009; display: flex; align-items: center; justify-content: center; z-index: 10; }
-  #podpis[hidden] { display: none; }
+  #podpis[hidden], #potvrzeni[hidden] { display: none; }
+  #potvrzeni { position: fixed; inset: 0; background: #0009; display: flex; align-items: center; justify-content: center; z-index: 11; }
+  #potvrzeni .okno { background: #fff8e1; color: #3e2723; border: 5px solid #ff7043; border-radius: 22px; padding: 18px 24px;
+                     text-align: center; width: min(380px, 86vw); box-shadow: 0 10px 30px #000a; }
+  #potvrzeni .pohar { font-size: 40px; line-height: 1; }
+  #potvrzeni .nadpis { font-size: 26px; font-weight: 800; color: #d84315; margin: 6px 0 4px; }
+  #potvrzeni .text { font-size: 17px; margin-bottom: 14px; }
+  #potvrzeni .tlacitka { display: flex; gap: 10px; }
+  #potvrzeni button { flex: 1; font-size: 19px; font-weight: 700; padding: 12px 8px; border-radius: 12px; border: none; touch-action: manipulation; }
+  #potvrzeni .ano { background: #e53935; color: #fff; }
+  #potvrzeni .ne { background: #43a047; color: #fff; }
   #podpisForm { background: #fff8e1; color: #3e2723; border: 5px solid #ffb300; border-radius: 22px; padding: 18px 26px;
                 text-align: center; width: min(360px, 86vw); box-shadow: 0 10px 30px #000a; }
   #podpis .pohar { font-size: 46px; line-height: 1; }
@@ -104,7 +114,16 @@
     <div class="tlacitka"><button type="submit" class="ulozit">Uložit</button><button type="button" id="preskocit">Přeskočit</button></div>
   </form>
 </div>
-<div class="help">⬆️⬇️⬅️➡️ létání &nbsp;·&nbsp; Mezerník = ÚTOK &nbsp;·&nbsp; R = raketa &nbsp;·&nbsp; P = pauza &nbsp;·&nbsp; M = zvuk &nbsp;·&nbsp; Esc = zpět do menu</div>
+<!-- dotaz před ukončením rozehrané hry -->
+<div id="potvrzeni" hidden>
+  <div class="okno">
+    <div class="pohar">✈️</div>
+    <div class="nadpis">Opravdu ukončit hru?</div>
+    <div class="text">Rozehraná hra se ztratí.</div>
+    <div class="tlacitka"><button type="button" id="ukoncitAno" class="ano">Ano, ukončit</button><button type="button" id="ukoncitNe" class="ne">Ne, hrát dál</button></div>
+  </div>
+</div>
+<div class="help">⬆️⬇️⬅️➡️ létání &nbsp;·&nbsp; Mezerník = ÚTOK &nbsp;·&nbsp; R = raketa &nbsp;·&nbsp; P = pauza &nbsp;·&nbsp; M = zvuk &nbsp;·&nbsp; Esc = ukončit hru &nbsp;·&nbsp; T = rekordy (v menu)</div>
 
 <script>
 // =====================================================================
@@ -119,6 +138,7 @@ const NASTAVENI = {
   dolarVolny: 5,           // samostatně visící dolar
   dolarBalon: 10,          // dolar z prasklého balónu
   dolarLetadlo: 20,        // dolar ze sestřeleného letadla
+  dolarPtak: 10,           // dolar ze sestřeleného ptáka
   dolaruNaLevel: 1000,     // kolik dolarů je potřeba na další level
   sanceNaBombu: 0.35,      // jak často je v řadě dolarů schovaná bomba (0 = nikdy, 1 = vždy)
   delkaStitu: 10,          // kolik sekund drží štít
@@ -147,7 +167,9 @@ const W = canvas.width, H = canvas.height;
 function nacti(cesta) { const i = new Image(); i.src = cesta; return i; }
 const LETADLA = [1, 2, 3, 4, 5, 6].map(c => nacti(`obrazky/letadlo${c}.png`));
 const MESTO = [nacti('obrazky/mesto.jpg'), ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(c => nacti(`obrazky/mesto${c}.jpg`))];
+const HORY = [nacti('obrazky/hory1.jpg'), nacti('obrazky/hory2.jpg')];   // Kubovy hory (sudé levely)
 const obrazky = {
+  ptak: nacti('obrazky/ptak.png'),
   bomba: nacti('obrazky/bomba.png'),
   stit: nacti('obrazky/stit.png'),
   raketa: nacti('obrazky/raketa_ikona.png'),
@@ -175,15 +197,25 @@ function nakresli(img, x, y, w, h, otocit = false, uhel = 0) {
 // ---------------------------------------------------------------------
 //  Pozadí: Kubovo město + 10 dalších obrázků, které na něj navazují
 // ---------------------------------------------------------------------
-function kresliPozadi() {
+// Pozadí se mění s levelem: liché levely = město, sudé levely = hory
+const jsouHory = lv => lv % 2 === 0;
+let pozadiTed = MESTO, pozadiPred = null, prechodPozadi = 0;
+function kresliSadu(sada) {
   const sirka = H * 959 / 720;            // šířka jednoho obrázku na obrazovce
   const x = posun * 0.5;
   let i = Math.floor(x / sirka);
   for (let sx = -(x % sirka); sx < W; sx += sirka, i++) {
-    const img = MESTO[((i % MESTO.length) + MESTO.length) % MESTO.length];
+    const img = sada[((i % sada.length) + sada.length) % sada.length];
     if (pripraven(img)) ctx.drawImage(img, Math.floor(sx), 0, Math.ceil(sirka) + 1, H);
     else { ctx.fillStyle = '#8fd0f5'; ctx.fillRect(sx, 0, sirka + 1, H); }
   }
+}
+function kresliPozadi() {
+  if (stav === 'menu' || stav === 'volba' || stav === 'tabulka') { kresliSadu(MESTO); return; }
+  if (prechodPozadi > 0 && pozadiPred) {          // plynulé prolnutí při změně levelu
+    kresliSadu(pozadiPred);
+    ctx.globalAlpha = 1 - prechodPozadi / 120; kresliSadu(pozadiTed); ctx.globalAlpha = 1;
+  } else kresliSadu(pozadiTed);
 }
 
 // ---------------------------------------------------------------------
@@ -194,6 +226,7 @@ let dotyk = false;            // hraje se na dotykové obrazovce?
 let volbaOvladani = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window) ? 1 : 0;
 let vybraneLetadlo = 0;       // které ze 6 letadel hráč vybral
 let rychleTuknuti = false;    // krátké ťuknutí na ÚTOK vystřelí, i když prst hned zvedneš
+let ptaci = [];
 let stitCas = 0, rakety = 0, bonusy = [], leticiRakety = [];
 let hrac, strely, nepratele, strelyNepratel, balony, kose, trosky, dolary, castice, napisy;
 let level = 1, skore = 0, zivoty = 0, posun = 0, cas = 0, nesmrtelnost = 0, prodleva = 0, otres = 0, konecZa = 0;
@@ -207,7 +240,8 @@ function novaHra() {
   strely = []; nepratele = []; strelyNepratel = []; balony = []; kose = []; trosky = [];
   stitCas = 0; rakety = 0; bonusy = []; leticiRakety = []; aktualizujTlacitkoRakety();
   dolary = []; castice = []; napisy = [];
-  level = 1; skore = 0; zivoty = NASTAVENI.zivoty; cas = 0; nesmrtelnost = 0; prodleva = 0; otres = 0; konecZa = 0;
+  level = 1; pozadiTed = MESTO; pozadiPred = null; prechodPozadi = 0; ptaci = [];
+  skore = 0; zivoty = NASTAVENI.zivoty; cas = 0; nesmrtelnost = 0; prodleva = 0; otres = 0; konecZa = 0;
   stav = 'hra';
   hrajZvuk('start');
 }
@@ -227,7 +261,12 @@ window.addEventListener('keydown', e => {
     if (e.key === ' ' || e.key === 'Enter') { nastavOvladani(volbaOvladani === 1); klavesy[' '] = false; }
     return;
   }
+  if (stav === 'tabulka') {
+    if ([' ', 'Enter', 'Escape', 't', 'T'].includes(e.key)) { stav = 'menu'; klavesy[' '] = false; }
+    return;
+  }
   if (stav === 'menu') {
+    if (e.key === 't' || e.key === 'T') { otevriTabulku(); return; }
     if (e.key === 'Escape') { stav = 'volba'; return; }
     const pred = vybraneLetadlo;
     if (e.key === 'ArrowRight') vybraneLetadlo = (vybraneLetadlo + 1) % 6;
@@ -240,7 +279,7 @@ window.addEventListener('keydown', e => {
     if (e.key === 'Escape') stav = 'menu';
   } else {
     if (e.key === 'p' || e.key === 'P') stav = stav === 'hra' ? 'pauza' : 'hra';
-    if (e.key === 'Escape') stav = 'menu';
+    if (e.key === 'Escape') otevriPotvrzeni();
   }
 });
 window.addEventListener('keyup', e => { klavesy[e.key] = false; });
@@ -252,9 +291,14 @@ function mysNaPlatne(e) {
 const VOLBY = [{ x: 150, y: 170, w: 300, h: 230 }, { x: 510, y: 170, w: 300, h: 230 }];
 const START = { x: 650, y: 448, w: 230, h: 66 };
 const uvnitr = (m, p) => m.x > p.x && m.x < p.x + p.w && m.y > p.y && m.y < p.y + p.h;
+const TL_TABULKA = { x: 790, y: 18, w: 152, h: 52 };
+function otevriTabulku() { stav = 'tabulka'; posledniPodpis = null; hrajZvuk('blip'); nactiOnline(); }
 canvas.addEventListener('pointerup', e => {
   zapniAudio();
+  if (ceka) return;
   const m = mysNaPlatne(e);
+  if (stav === 'tabulka') { stav = 'menu'; return; }
+  if (stav === 'menu' && uvnitr(m, TL_TABULKA)) { otevriTabulku(); return; }
   if (stav === 'volba') {
     const i = VOLBY.findIndex(p => uvnitr(m, p));
     if (i >= 0) nastavOvladani(i === 1);
@@ -408,6 +452,7 @@ utok.addEventListener('pointerdown', e => {
   try { utok.setPointerCapture(e.pointerId); } catch (_) {}
   utok.classList.add('stisk');
   if (ceka) return;
+  if (stav === 'tabulka') { stav = 'menu'; return; }
   if (stav === 'menu' || stav === 'konec') { novaHra(); return; }
   if (stav === 'pauza') stav = 'hra';
   klavesy[' '] = true; rychleTuknuti = true;
@@ -430,7 +475,31 @@ raketaTl.addEventListener('pointerdown', e => {
 const tlZvuk = document.getElementById('tlZvuk');
 document.getElementById('tlPauza').addEventListener('pointerup', () => { if (stav === 'hra') stav = 'pauza'; else if (stav === 'pauza') stav = 'hra'; });
 tlZvuk.addEventListener('pointerup', () => { zapniAudio(); zvukZapnuty = !zvukZapnuty; tlZvuk.textContent = zvukZapnuty ? '🔊' : '🔇'; });
-document.getElementById('tlMenu').addEventListener('pointerup', () => { stav = stav === 'menu' ? 'volba' : 'menu'; krizPustit(); });
+document.getElementById('tlMenu').addEventListener('pointerup', () => {
+  krizPustit();
+  if (stav === 'hra' || stav === 'pauza') { otevriPotvrzeni(); return; }      // rozehraná hra: nejdřív se zeptat
+  stav = stav === 'menu' ? 'volba' : 'menu';
+});
+
+// Dotaz „Opravdu ukončit hru?“ – aby si nikdo hru nezkazil omylem
+const potvrzeni = document.getElementById('potvrzeni');
+let stavPredDotazem = 'hra';
+function otevriPotvrzeni() {
+  stavPredDotazem = stav; stav = 'pauza'; ceka = true; potvrzeni.hidden = false;
+  for (const k in klavesy) klavesy[k] = false;
+  setTimeout(() => { try { document.getElementById('ukoncitNe').focus(); } catch (e) {} }, 30);
+}
+function zavriPotvrzeni(ukoncit) {
+  potvrzeni.hidden = true; ceka = false;
+  stav = ukoncit ? 'menu' : (stavPredDotazem === 'pauza' ? 'pauza' : 'hra');
+}
+document.getElementById('ukoncitAno').addEventListener('click', () => zavriPotvrzeni(true));
+document.getElementById('ukoncitNe').addEventListener('click', () => zavriPotvrzeni(false));
+potvrzeni.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Escape') zavriPotvrzeni(false);
+});
+potvrzeni.addEventListener('keyup', e => e.stopPropagation());
 document.getElementById('tlCelaObrazovka').addEventListener('pointerup', () => {
   try {
     const el = document.documentElement;
@@ -484,7 +553,7 @@ function zmerOkno() {
 if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { posledniRozmer = ''; zmerOkno(); });
 if (window.ResizeObserver) new ResizeObserver(() => zmerOkno()).observe(obal);
 setInterval(zmerOkno, 1000);                                       // pojistka: kontrola každou sekundu
-const mimoPodpis = e => !(e.target && e.target.closest && e.target.closest('#podpis'));
+const mimoPodpis = e => !(e.target && e.target.closest && e.target.closest('#podpis, #potvrzeni'));
 // v dotykovém režimu zakážeme prohlížeči posouvat a přibližovat stránku
 ['touchstart', 'touchmove'].forEach(t => document.addEventListener(t, e => {
   if (dotyk && mimoPodpis(e) && e.cancelable) e.preventDefault();
@@ -593,6 +662,10 @@ function hrajZvuk(co) {
       [392, 370, 349].forEach((f, i) => ton(f, f * 0.97, 0.35, 'sawtooth', 0.15, i * 0.4, 4));
       ton(330, 300, 1.1, 'sawtooth', 0.15, 1.2, 9); break;
     case 'blip': ton(660, 880, 0.06, 'square', 0.08); break;
+    case 'slepice':                                   // nakopnutá slepice: kok-kok-KOKODÁÁÁK!
+      ton(650, 1050, 0.06, 'sawtooth', 0.16, 0, 30); ton(700, 1100, 0.06, 'sawtooth', 0.16, 0.09, 30);
+      ton(850, 1700, 0.11, 'sawtooth', 0.22, 0.2, 90); sum(0.08, 0.25, 3000, 1800, 'bandpass', 0.2);
+      ton(1700, 650, 0.45, 'sawtooth', 0.2, 0.31, 120); ton(1300, 500, 0.4, 'square', 0.06, 0.33, 60); break;
     case 'bonus': [660, 880, 1100, 1320].forEach((f, i) => ton(f, f * 1.05, 0.09, 'triangle', 0.2, i * 0.05)); break;
     case 'stitPryc': ton(1200, 200, 0.4, 'triangle', 0.25); sum(0.3, 0.2, 6000, 1500, 'highpass'); break;
     case 'raketa': sum(0.7, 0.35, 400, 3000, 'bandpass'); ton(200, 900, 0.5, 'sawtooth', 0.08); break;
@@ -733,7 +806,9 @@ function aktualizuj(dt) {
     const vyska = 52, sirka = Math.max(60, Math.min(140, vyska * pomer(img, 1.8)));
     nepratele.push({ img, x: W + 20, y: nahodne(20, H - 120), w: sirka, h: vyska, vx: nahodne(2, 3.5) * lv.rychlost, faze: nahodne(0, 6), strelba: nahodne(60, 160) });
   }
-  if (Math.random() < lv.balony * dt)
+  if (Math.random() < lv.balony * dt && jsouHory(level))
+    ptaci.push({ x: W + 20, y: nahodne(20, H - 160), w: 92, h: 90, faze: nahodne(0, 6), vx: nahodne(1.2, 2.4) });
+  else if (Math.random() < lv.balony * dt && !jsouHory(level))
     balony.push({ x: W + 20, y: nahodne(20, H - 200), w: 75, h: 146, faze: nahodne(0, 6) });
   if (Math.random() < 0.008 * dt) pridejDolary(W + 20, nahodne(60, H - 120), Math.floor(nahodne(3, 6)));
 
@@ -754,6 +829,11 @@ function aktualizuj(dt) {
   for (const b of balony) {
     b.x -= rychlostSveta * 0.8 * dt; b.faze += 0.025 * dt; b.y += Math.sin(b.faze) * 0.7 * dt;
     if (hrac.ziv && srazka(hrac, b)) { b.znicen = true; praskniBalon(b); zasah(); }
+  }
+  // ptáci mávají křídly a letí proti nám
+  for (const p of ptaci) {
+    p.x -= (rychlostSveta + p.vx) * dt; p.faze += 0.18 * dt; p.y += Math.sin(p.faze * 0.35) * 1.3 * dt;
+    if (hrac.ziv && srazka(hrac, p)) { p.znicen = true; sestrelPtaka(p); zasah(); }
   }
   // koše z prasklých balónů padají dolů
   for (const k of kose) { k.vy += 0.25 * dt; k.x -= rychlostSveta * 0.6 * dt; k.y += k.vy * dt; k.uhel += k.rot * dt; }
@@ -784,6 +864,7 @@ function aktualizuj(dt) {
   for (const s of strely) {
     for (const n of nepratele) if (!n.znicen && !s.pryc && srazka(s, n)) { n.znicen = true; s.pryc = true; sestrel(n); }
     for (const b of balony) if (!b.znicen && !s.pryc && srazka(s, b)) { b.znicen = true; s.pryc = true; praskniBalon(b); }
+    for (const p of ptaci) if (!p.znicen && !s.pryc && srazka(s, p)) { p.znicen = true; s.pryc = true; sestrelPtaka(p); }
     for (const d of dolary) if (d.bomba && !d.sebrano && !s.pryc && srazka(s, d)) { d.sebrano = true; s.pryc = true; vybuch(d.x + d.w / 2, d.y + d.h / 2, 1); }
   }
 
@@ -818,7 +899,7 @@ function aktualizuj(dt) {
     if (cil) r.vy += Math.sign(cil.y + cil.h / 2 - (r.y + r.h / 2)) * 0.35 * dt;
     r.vy *= 0.94; r.x += r.vx * dt; r.y += r.vy * dt;
     if ((r.kour -= dt) <= 0) { r.kour = 2; castice.push({ typ: 'kour', x: r.x, y: r.y + r.h / 2, vx: -1, vy: 0, r: nahodne(5, 9), zivot: 30, plny: 30 }); }
-    const zasahl = nepratele.some(n => !n.znicen && srazka(r, n)) || balony.some(b => !b.znicen && srazka(r, b));
+    const zasahl = nepratele.some(n => !n.znicen && srazka(r, n)) || balony.some(b => !b.znicen && srazka(r, b)) || ptaci.some(p => !p.znicen && srazka(r, p));
     if (zasahl) { r.pryc = true; velkyVybuchRakety(r.x + r.w, r.y + r.h / 2); }
   }
 
@@ -828,6 +909,7 @@ function aktualizuj(dt) {
     else { c.x += c.vx * dt; c.y += c.vy * dt; }
     if (c.typ === 'ohen') { c.vx *= 0.92; c.vy *= 0.92; }
     if (c.typ === 'kostka' || c.typ === 'cara') { c.vy += 0.2 * dt; c.uhel += c.rot * dt; }
+    if (c.typ === 'pero') { c.vy = Math.min(1.2, c.vy + 0.08 * dt); c.vx *= 0.97; c.x += Math.sin(c.zivot * 0.15) * 1.2 * dt; c.uhel += c.rot * dt; }
     if (c.typ === 'kour') { c.r += 0.3 * dt; c.x -= rychlostSveta * 0.5 * dt; }
   }
   for (const n of napisy) { n.y -= 0.8 * dt; n.zivot -= dt; }
@@ -837,6 +919,7 @@ function aktualizuj(dt) {
   strelyNepratel = strelyNepratel.filter(s => !s.pryc && s.x > -30);
   nepratele = nepratele.filter(n => !n.znicen && n.x > -150);
   balony = balony.filter(b => !b.znicen && b.x + b.w > -20);
+  ptaci = ptaci.filter(p => !p.znicen && p.x + p.w > -20);
   kose = kose.filter(k => k.y < H + 100);
   trosky = trosky.filter(t => t.y < H + 100);
   dolary = dolary.filter(d => !d.sebrano && d.x > -50);
@@ -847,12 +930,15 @@ function aktualizuj(dt) {
   if (nesmrtelnost > 0) nesmrtelnost -= dt;
   if (otres > 0) otres -= dt;
   if (levelNapis > 0) levelNapis -= dt;
+  if (prechodPozadi > 0) prechodPozadi -= dt;
 }
 
 // Další level! Jedno srdíčko navíc (když nějaké chybí) a velký nápis
 let levelNapis = 0;
 function dalsiLevel() {
   level++; levelNapis = 150;
+  const nove = jsouHory(level) ? HORY : MESTO;
+  if (nove !== pozadiTed) { pozadiPred = pozadiTed; pozadiTed = nove; prechodPozadi = 120; }
   if (zivoty < NASTAVENI.zivoty) zivoty++;
   hrajZvuk('level');
 }
@@ -860,6 +946,7 @@ function dalsiLevel() {
 // Raketa udělá velký výbuch a zničí všechno kolem sebe
 let chciRaketu = false, raketaDrzena = false;
 function velkyVybuchRakety(x, y) {
+  for (const p of ptaci) if (!p.znicen && Math.hypot(p.x + p.w / 2 - x, p.y + p.h / 2 - y) < 150) { p.znicen = true; sestrelPtaka(p); }
   vybuch(x, y, 2); otres = 14;
   for (const n of nepratele) if (!n.znicen && Math.hypot(n.x + n.w / 2 - x, n.y + n.h / 2 - y) < 150) { n.znicen = true; sestrel(n); }
   for (const b of balony) if (!b.znicen && Math.hypot(b.x + b.w / 2 - x, b.y + b.h / 2 - y) < 150) { b.znicen = true; praskniBalon(b); }
@@ -873,6 +960,19 @@ function sestrel(n) {
   pridejDolary(n.x + n.w / 2 - 21, n.y + n.h / 2 - 21, 1, NASTAVENI.dolarLetadlo);
 }
 // Balón praskne a jeho koš spadne dolů
+// Sestřelený pták: KOKODÁK! peří se rozletí, pták padá a upustí dolar
+function sestrelPtaka(p) {
+  const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+  hrajZvuk('slepice');
+  for (let i = 0; i < 16; i++)
+    castice.push({ typ: 'pero', x: cx + nahodne(-20, 20), y: cy + nahodne(-15, 15), vx: nahodne(-3, 3), vy: nahodne(-4, 0),
+                   uhel: nahodne(0, 6), rot: nahodne(-0.15, 0.15), zivot: nahodne(60, 100), plny: 100,
+                   barva: ['#fff8e1', '#c97b3c', '#8d5524', '#ffffff'][i % 4] });
+  trosky.push({ img: obrazky.ptak, x: p.x, y: p.y, w: p.w, h: p.h, vx: -1, vy: -3, uhel: 0, rot: nahodne(0.06, 0.12), otocit: false, kour: 1e9 });
+  napis(['KOKODÁK!', 'KDÁÁÁK!', 'AU AU!'][Math.floor(Math.random() * 3)], cx, cy - 30, '#fff59d');
+  pridejDolary(cx - 24, cy - 10, 1, NASTAVENI.dolarPtak);
+}
+
 function praskniBalon(b) {
   const vrsek = b.h * 150 / 220;          // kde končí balón a začíná koš
   prasknuti(b.x + b.w / 2, b.y + vrsek * 0.4);
@@ -980,6 +1080,12 @@ function kresliRaketu(r) {
 
 function kresliMenu() {
   ctx.fillStyle = '#0005'; ctx.fillRect(0, 0, W, H);
+  // tlačítko s tabulkou rekordů
+  const t = TL_TABULKA;
+  ctx.fillStyle = '#ffb300'; ctx.beginPath(); ctx.roundRect(t.x, t.y, t.w, t.h, 14); ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
+  text('🏆 Rekordy', t.x + t.w / 2, t.y + t.h / 2 + 1, 22, '#fff');
+  if (!dotyk) text('(T)', t.x + t.w / 2, t.y + t.h + 14, 14, '#ddd');
   text('Kubíkovo letadýlko', W / 2, 50, 46, '#ffeb3b');
   text('Vyber si své letadlo', W / 2, 105, 26);
   POLICKA.forEach((p, i) => {
@@ -1005,12 +1111,22 @@ function vykresli() {
   if (otres > 0) ctx.translate(nahodne(-otres, otres) * 0.6, nahodne(-otres, otres) * 0.6);
   kresliPozadi();
   if (stav === 'volba') { ctx.restore(); kresliVolbu(); return; }
+  if (stav === 'tabulka') {
+    ctx.restore(); ctx.fillStyle = '#0006'; ctx.fillRect(0, 0, W, H);
+    kresliTabulku(315, 60);
+    text(dotyk ? 'Ťukni kamkoli = zpět' : 'Mezerník = zpět', W / 2, 470, 22, '#ffeb3b');
+    return;
+  }
   if (stav === 'menu') { ctx.restore(); kresliMenu(); return; }
 
   for (const b of balony) {
     const vrsek = b.h * 150 / 220;
     nakresli(obrazky.balon, b.x, b.y, b.w, vrsek);
     nakresli(obrazky.kos, b.x, b.y + vrsek, b.w, b.h - vrsek);
+  }
+  for (const p of ptaci) {                  // mávání křídly = pták se natahuje a smršťuje
+    const mav = Math.sin(p.faze);
+    nakresli(obrazky.ptak, p.x, p.y + mav * 4, p.w, p.h * (1 + mav * 0.12), false, mav * 0.08);
   }
   for (const k of kose) nakresli(obrazky.kos, k.x, k.y, k.w, k.h, false, k.uhel);
   for (const d of dolary) {
@@ -1052,6 +1168,12 @@ function vykresli() {
       ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.uhel);
       ctx.fillStyle = c.barva; ctx.fillRect(-c.r, -c.r * 0.6, c.r * 2, c.r * 1.2);
       ctx.fillRect(-c.r * 0.6, -c.r, c.r * 0.5, c.r * 0.4); ctx.fillRect(c.r * 0.1, -c.r, c.r * 0.5, c.r * 0.4);
+      ctx.restore();
+    } else if (c.typ === 'pero') {           // pírko
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.uhel);
+      ctx.fillStyle = c.barva; ctx.strokeStyle = '#5d4037'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(0, 0, 10, 4, 0, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(10, 0); ctx.stroke();
       ctx.restore();
     } else if (c.typ === 'cara') {            // kousky prasklého balónu
       ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.uhel);
